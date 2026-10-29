@@ -28,93 +28,16 @@ import sys
 import time
 from pathlib import Path
 
-import re
-
-import anthropic
 import pandas as pd
 
 # Add project root to path so `spotterprep` imports resolve when run as a script
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from spotterprep.iteration1_confidence import score_issues, print_confidence_report
+from spotterprep.iteration1_confidence import score_issues, print_confidence_report  # noqa: E402
+from spotterprep.llm import DEFAULT_MODEL, LLMClient, make_client, sanitise_issue  # noqa: E402
 
-# ── Model ────────────────────────────────────────────────────────────────────
-
-MODEL = "claude-sonnet-4-6"
-
-# ── PII sanitisation ─────────────────────────────────────────────────────────
-# Issue types and column name patterns that must never send raw values to the LLM.
-# The LLM receives column metadata and statistics — never actual PII or monetary values.
-# See docs/06_pii_policy.md for the full policy and rationale.
-
-_REDACT_ISSUE_TYPES = {"NULL_PII", "NULL_MONETARY", "NEGATIVE_MONETARY"}
-
-_REDACT_COL = re.compile(
-    r'amount|price|revenue|cost|salary|pay|fee|charge|balance|debit|credit|arr|mrr|ltv|cac'
-    r'|(?:^|_)(?:name|email|phone|address|ssn|dob|birth|passport)(?:_|$)'
-    r'|account.?number|employee.?id|patient.?id|ip.?address',
-    re.I,
-)
-
-
-def _sanitise_for_llm(issue: dict) -> dict:
-    """
-    Return a copy of the issue that is safe to include in an LLM prompt.
-
-    Redacts example_values for PII and monetary columns. All other fields
-    (column name, issue type, counts, issue detail) are always safe — they
-    are metadata, not personal data.
-
-    The original issue dict in the confidence map is never modified.
-    """
-    if issue["issue_type"] in _REDACT_ISSUE_TYPES or _REDACT_COL.search(issue["column"]):
-        safe = issue.copy()
-        safe["example_values"] = ["[redacted — PII or monetary column]"]
-        return safe
-    return issue
-
-# ── System prompts ───────────────────────────────────────────────────────────
-
-_SYSTEM_QUESTION = """\
-You are SpotterPrep, an AI data preparation assistant embedded in a data workspace.
-Your job: ask ONE targeted question about a data quality issue so the analyst can give
-you the business context you need to decide what to do.
-
-Rules:
-- Ask exactly one question. No follow-ups in the same message.
-- Reference a real value from the example_values provided — never ask about abstract
-  statistics like "14.9% null". Ask about a specific case.
-- Be concise: 2–3 sentences maximum.
-- Do not propose any fix yet. Only ask.
-- Start the question directly — no preamble, no "Sure!", no "Great question!"."""
-
-_SYSTEM_PARSE = """\
-You are SpotterPrep, an AI data preparation assistant.
-An analyst has answered a question about a data quality issue.
-Based on their answer, update the confidence classification for the issue.
-
-Respond with valid JSON only — no explanation, no markdown fences, just the JSON object.
-
-Schema:
-{
-  "confidence_level": "HIGH" | "MEDIUM" | "LOW",
-  "recommended_action": <string — one of the actions listed below>,
-  "context_note": <short string explaining what changed and why>,
-  "reclassified": <boolean — true if confidence_level changed>
-}
-
-Valid recommended_action values:
-  DEDUPLICATE_KEEP_FIRST, FLAG_NULL_MONETARY, PRESERVE_NULL, ESCALATE_TO_USER,
-  IMPUTE_MEDIAN, IMPUTE_MODE, SET_ZERO_OR_ABS, NULLIFY_MALFORMED, FLAG_SCHEDULED,
-  DELETE_ROW, STANDARDIZE_AFTER_CANONICAL_CONFIRMED, FLAG_OUTLIER_REVIEW,
-  COERCE_TO_DOMINANT_TYPE, TRIM_WHITESPACE, FLAG_AND_PRESERVE, CONVERT_TO_REFUND
-
-Guidance:
-- If the analyst says the nulls are legitimate (contractors, opt-outs, pending orders) →
-  confidence_level: LOW, recommended_action: PRESERVE_NULL
-- If the analyst confirms the value is an error → raise confidence_level to HIGH
-- If the analyst confirms negative monetary values are refunds →
-  recommended_action: CONVERT_TO_REFUND
-- If still ambiguous after the answer → keep MEDIUM, recommended_action: ESCALATE_TO_USER"""
+# Prompts, structured output, validation, retries, guardrails and the call log all live in
+# spotterprep/llm.py. Kept as an alias for docs/06_pii_policy.md.
+_sanitise_for_llm = sanitise_issue
 
 
 # ── Terminal formatting ───────────────────────────────────────────────────────
@@ -168,79 +91,6 @@ def _estimate_score(confidence_map: dict) -> tuple[float, str]:
     return score, grade
 
 
-# ── LLM helpers ──────────────────────────────────────────────────────────────
-
-def _generate_question(client: anthropic.Anthropic, issue: dict, table_name: str) -> str:
-    safe = _sanitise_for_llm(issue)
-    examples = safe.get("example_values") or []
-    example_str = f"Example values from actual data: {examples}" if examples else ""
-
-    prompt = f"""Table: {table_name}
-Column: {safe['column']}
-Issue type: {safe['issue_type']}
-Rows affected: {safe['count']:,} ({safe['pct']:.1%} of table)
-Issue detail: {safe['detail']}
-{example_str}
-Confidence level: {safe['confidence_level']}
-Current recommended action: {safe['recommended_action']}
-
-Ask one targeted question to understand the business context for this issue."""
-
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=200,
-        system=_SYSTEM_QUESTION,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return resp.content[0].text.strip()
-
-
-def _parse_answer(
-    client: anthropic.Anthropic,
-    issue: dict,
-    question: str,
-    answer: str,
-    table_name: str,
-) -> dict:
-    safe = _sanitise_for_llm(issue)
-    prompt = f"""Table: {table_name}
-Column: {safe['column']}
-Issue type: {safe['issue_type']}
-Issue detail: {safe['detail']}
-Example values: {safe.get('example_values', [])}
-Current confidence level: {safe['confidence_level']}
-Current recommended action: {safe['recommended_action']}
-
-Question that was asked: {question}
-Analyst's answer: {answer}
-
-Update the confidence classification based on this answer."""
-
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=250,
-        system=_SYSTEM_PARSE,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw = resp.content[0].text.strip()
-    # Strip markdown fences if model adds them
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {
-            "confidence_level": issue["confidence_level"],
-            "recommended_action": issue["recommended_action"],
-            "context_note": f"Analyst said: {answer}",
-            "reclassified": False,
-        }
-
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def run_iter2(
@@ -248,21 +98,22 @@ def run_iter2(
     table_name: str = None,
     pk_column: str = None,
     nrows: int = 50_000,
+    model: str = DEFAULT_MODEL,
+    llm: LLMClient | None = None,
 ) -> dict:
 
     # ── API key check ─────────────────────────────────────────────────────
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print(f"\n  {_RED}Error:{_RESET} ANTHROPIC_API_KEY not set.")
-        print("  Run: export ANTHROPIC_API_KEY=your_key\n")
-        sys.exit(1)
-
-    client = anthropic.Anthropic(api_key=api_key)
+    if llm is None:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print(f"\n  {_RED}Error:{_RESET} ANTHROPIC_API_KEY not set.")
+            print("  Run: export ANTHROPIC_API_KEY=your_key\n")
+            sys.exit(1)
+        llm = make_client(model=model)
 
     # ── Load CSV ──────────────────────────────────────────────────────────
     print(f"\n  Loading {csv_path} ...")
     try:
-        df = pd.read_csv(csv_path, nrows=nrows, low_memory=False)
+        df = pd.read_csv(csv_path, nrows=nrows, keep_default_na=False, na_values=[""], low_memory=False)
     except FileNotFoundError:
         print(f"\n  {_RED}Error:{_RESET} File not found — {csv_path}\n")
         sys.exit(1)
@@ -326,7 +177,7 @@ def run_iter2(
 
         # Generate question via Claude
         print(f"  {_GRAY}(thinking...){_RESET}", end="\r", flush=True)
-        question = _generate_question(client, issue, table_name)
+        question = llm.generate_question(issue, table_name)
         _print_sp(question)
 
         # Get analyst answer
@@ -339,7 +190,7 @@ def run_iter2(
 
         # Parse answer and update confidence map
         print(f"  {_GRAY}(updating confidence map...){_RESET}", end="\r", flush=True)
-        update = _parse_answer(client, issue, question, answer, table_name)
+        update = llm.reclassify(issue, question, answer, table_name)
 
         old_level = issue["confidence_level"]
         issue["confidence_level"]   = update["confidence_level"]
@@ -349,7 +200,11 @@ def run_iter2(
         issue["iter2_question"]     = question
 
         changed = old_level != update["confidence_level"]
-        if changed:
+        if update.get("guardrail"):
+            print(f"  {_YELLOW}! Guardrail:{_RESET} {update['guardrail']}" + " " * 20)
+        if not update.get("valid", True):
+            print(f"  {_RED}! Model output failed validation; issue left unchanged{_RESET}" + " " * 20)
+        elif changed:
             print(
                 f"  {_GREEN}✓ Reclassified:{_RESET} {old_level} → {update['confidence_level']}  "
                 f"·  action: {update['recommended_action']}" + " " * 20
@@ -368,6 +223,8 @@ def run_iter2(
             "new_confidence":   update["confidence_level"],
             "recommended_action": update["recommended_action"],
             "context_note":     update.get("context_note", ""),
+            "valid":            update.get("valid", True),
+            "guardrail":        update.get("guardrail"),
         })
 
     # ── Rebuild summary ───────────────────────────────────────────────────
@@ -431,15 +288,15 @@ Examples:
     parser.add_argument("--pk",     help="Primary key column name (auto-detected if omitted)")
     parser.add_argument("--nrows",  type=int, default=50_000,
                         help="Rows to scan (default: 50,000)")
-    parser.add_argument("--model",  default=MODEL,
-                        help=f"Claude model to use (default: {MODEL})")
+    parser.add_argument("--model",  default=DEFAULT_MODEL,
+                        help=f"Claude model to use (default: {DEFAULT_MODEL}; or set SPOTTERPREP_MODEL)")
 
     args = parser.parse_args()
-    MODEL = args.model  # allow override
 
     run_iter2(
         csv_path=args.csv_path,
         table_name=args.table,
         pk_column=args.pk,
         nrows=args.nrows,
+        model=args.model,
     )

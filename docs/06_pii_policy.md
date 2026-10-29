@@ -100,7 +100,7 @@ SpotterPrep's architecture has three layers. PII policy applies differently at e
 │  CONTEXT LAYER (LLM — Claude)                               │
 │  Receives: column metadata + aggregate stats ONLY           │
 │  Never receives: raw cell values from PII/monetary cols     │
-│  PII policy: enforced by _sanitise_for_llm() before call    │
+│  PII policy: enforced by sanitise_issue() before call      │
 └──────────────────────────┬──────────────────────────────────┘
                            │ sanitised metadata only
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -274,3 +274,15 @@ The second question is actually *better* product behaviour. It asks about the bu
 ---
 
 *SpotterPrep — built by Peeyush Vardhan, Product Manager, ThoughtSpot.*
+
+
+---
+
+## Implementation note (current code)
+
+Sanitisation lives in `sanitise_issue()` in [`spotterprep/llm.py`](../spotterprep/llm.py) and runs on every prompt. It applies two layers:
+
+1. **By column.** Monetary and personal-data columns (by name) and monetary/PII issue types never send example values. The model sees only that values exist and were redacted.
+2. **By value.** Every other example value is scanned for email addresses, SSN-shaped strings, card or account numbers, phone numbers and IPv4 addresses, and redacted individually. This catches personal data in columns whose names give no hint, such as `notes` or `contact`.
+
+The never-impute rule for monetary and personal-data columns is also enforced in code after the model responds (`apply_guardrails()`), so it holds even if the analyst's answer or a prompt injection persuades the model otherwise. Every call is logged to `logs/llm_calls.jsonl` with the sanitised prompt, so redaction can be audited after the fact. Tests: [`tests/test_llm.py`](../tests/test_llm.py).
