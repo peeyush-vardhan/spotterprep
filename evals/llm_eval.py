@@ -5,10 +5,15 @@ Runs every labeled case in evals/data/llm_reclassification_cases.json through
 LLMClient.reclassify() and reports:
 
   Valid output     share of calls whose tool output passed schema validation
-  Level accuracy   final confidence level is one the label accepts
   Action accuracy  final recommended action is one the label accepts
+  Level follows    the model's own confidence level matches the level its action implies
+  definition       under the definition in spotterprep/llm.py. Code corrects any mismatch,
+                   so this measures whether the model understood the definition.
   Guardrail        no monetary or personal-data issue ends with an imputation action,
                    plus how often the code guardrail had to override the model
+
+Labels list acceptable actions only. The expected confidence level follows from the action
+(spotterprep.llm.required_level), so it is never labeled separately.
 
 Two ways to reach the model:
   --backend api         Anthropic API; needs ANTHROPIC_API_KEY. Temperature 0.
@@ -33,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from spotterprep.llm import DEFAULT_MODEL, LLMClient, is_protected_column  # noqa: E402
+from spotterprep.llm import DEFAULT_MODEL, LLMClient, is_protected_column, required_level  # noqa: E402
 
 CASES_PATH = ROOT / "evals" / "data" / "llm_reclassification_cases.json"
 _IMPUTE = {"IMPUTE_MEDIAN", "IMPUTE_MODE"}
@@ -58,7 +63,10 @@ def run(llm: LLMClient, cases: list[dict], repeats: int = 1, backend: str = "api
             rows.append({
                 "id": case["id"], "valid": out.get("valid", True),
                 "level": out["confidence_level"], "action": out["recommended_action"],
-                "level_ok": out["confidence_level"] in exp["confidence_levels"],
+                "model_level": out.get("model_confidence_level", out["confidence_level"]),
+                "level_ok": out["confidence_level"] == required_level(issue, out["recommended_action"]),
+                "model_level_ok": out.get("model_confidence_level", out["confidence_level"])
+                == required_level(issue, out["recommended_action"]),
                 "action_ok": out["recommended_action"] in exp["recommended_actions"],
                 "protected": protected,
                 "unsafe": protected and out["recommended_action"] in _IMPUTE,
@@ -74,13 +82,14 @@ def run(llm: LLMClient, cases: list[dict], repeats: int = 1, backend: str = "api
         "model": llm.model, "backend": backend,
         "temperature": "0" if backend == "api" else "not settable (Claude Code CLI)", "cases": len(cases), "calls": n, "repeats": repeats,
         "valid_output_rate": rate("valid"),
-        "level_accuracy": rate("level_ok"),
         "action_accuracy": rate("action_ok"),
-        "both_correct": round(sum(r["level_ok"] and r["action_ok"] for r in rows) / n, 3) if n else None,
+        "model_level_follows_definition": rate("model_level_ok"),
+        "final_level_follows_definition": rate("level_ok"),
+        "level_corrections": sum(not r["model_level_ok"] for r in rows),
         "protected_calls": len(protected_rows),
         "unsafe_final_actions": sum(r["unsafe"] for r in rows),
         "guardrail_overrides": sum(r["guardrail_fired"] for r in rows),
-        "failures": [r for r in rows if not (r["level_ok"] and r["action_ok"])],
+        "failures": [r for r in rows if not (r["action_ok"] and r["model_level_ok"])],
         "actions_seen": dict(Counter(r["action"] for r in rows)),
     }
     if repeats > 1:
@@ -96,17 +105,18 @@ def to_markdown(r: dict) -> str:
         f"Model `{r['model']}` via {r.get('backend', 'api')} (temperature: {r.get('temperature', '0')}), "
         f"{r['cases']} labeled cases, {r['calls']} calls.", "",
         f"- **Valid structured output:** {pct(r['valid_output_rate'])}",
-        f"- **Confidence level accuracy:** {pct(r['level_accuracy'])}",
         f"- **Recommended action accuracy:** {pct(r['action_accuracy'])}",
-        f"- **Both correct:** {pct(r['both_correct'])}",
+        f"- **Model's confidence level follows the definition:** {pct(r['model_level_follows_definition'])}"
+        f" ({r['level_corrections']} corrected in code; final levels {pct(r['final_level_follows_definition'])})",
         f"- **Unsafe final actions on monetary/PII issues:** {r['unsafe_final_actions']} of {r['protected_calls']}"
         f" (code guardrail overrode the model {r['guardrail_overrides']} times)",
     ]
     if "stable_case_rate" in r:
         lines.append(f"- **Same answer on every repeat:** {pct(r['stable_case_rate'])} of cases")
     if r["failures"]:
-        lines += ["", "## Disagreements with the label", "", "| Case | Level | Action |", "|---|---|---|"]
-        lines += [f"| {f['id']} | {f['level']} | {f['action']} |" for f in r["failures"]]
+        lines += ["", "## Misses", "", "| Case | Model level | Final level | Action | Action OK |", "|---|---|---|---|---|"]
+        lines += [f"| {f['id']} | {f['model_level']} | {f['level']} | {f['action']} | {'yes' if f['action_ok'] else 'no'} |"
+                  for f in r["failures"]]
     return "\n".join(lines) + "\n"
 
 

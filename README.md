@@ -83,17 +83,23 @@ What moved the numbers: text checks were silently skipped under pandas 3, the sc
 
 Still missed, and left visible on purpose: general out-of-range values such as a 999 °C sensor reading, which need bounds the analyst supplies in Iteration 2, and format issues such as HTML in descriptions or text in the wrong language column, which no check covers yet. The full list is in [`evals/results/detection_eval.md`](evals/results/detection_eval.md).
 
-**Iteration 2 (LLM).** The reclassification call uses forced tool use with an enum-constrained schema, validates the output in code, retries transient errors with backoff, runs at temperature 0 and logs every call. The never-impute rule for money and personal data is enforced after the model answers, so a prompt injection cannot override it. [`evals/llm_eval.py`](evals/llm_eval.py) scores the model on 20 labeled cases, run three times each:
+**Iteration 2 (LLM).** The reclassification call uses forced tool use with an enum-constrained schema, validates the output in code, retries transient errors with backoff, runs at temperature 0 and logs every call. The never-impute rule for money and personal data is enforced after the model answers, so a prompt injection cannot override it. [`evals/llm_eval.py`](evals/llm_eval.py) scores the model on 20 labeled cases, run three times each.
 
-| Metric (Iteration 2, `claude-sonnet-5-5`, 60 calls) | Result |
-|---|---|
-| Valid structured output | 100% |
-| Recommended action matches the label | 100% |
-| Confidence level matches the label | 92% |
-| Same answer on all three runs | 90% of cases |
-| Money or personal-data issue ends in an imputation | 0 of 24 |
+Confidence has a written definition: how far the pipeline may go with the action without asking the analyst again. HIGH means it applies the fix automatically, MEDIUM means a human still decides, and LOW means it will not change the values on its own, either because the right move is to keep or flag them or because the fix touches money. The level follows from the action, so code enforces it and labels only list acceptable actions.
 
-Every miss has the same cause. When the analyst confirms that negative amounts are refunds, or that future order dates are pre-orders, the model picks the right action but rates it HIGH, while the labels say LOW. The prompt never defines whether confidence means "how sure we are this is an error" or "how sure we are of the action", so this is a gap in the spec, not a model mistake. It is left in the results rather than fixed by relabeling. These runs went through the Claude Code CLI on a subscription login (`--backend claude-cli`), which cannot set temperature; the API path runs at temperature 0. Full results: [`evals/results/llm_eval.md`](evals/results/llm_eval.md).
+| Metric (Iteration 2, `claude-sonnet-5-5`, 60 calls) | Before the definition | After |
+|---|---|---|
+| Valid structured output | 100% | 100% |
+| Recommended action matches the label | 100% | 100% |
+| Confidence level is the right one | 92% | 100% |
+| Same answer on all three runs | 90% of cases | 100% of cases |
+| Money or personal-data issue ends in an imputation | 0 of 24 | 0 of 24 |
+
+The first run missed in one consistent way. When the analyst confirmed that negative amounts were refunds or that future dates were pre-orders, the model chose the right action but rated it HIGH. The prompt never said what confidence meant, so the model read it as "how sure am I" while the pipeline needed "may I apply this on my own". Writing that down fixed both the misses and the run-to-run drift. Adopting it moved two labels (a confirmed sign error on money is now LOW, because money needs approval), and two labels were tightened so that a vague "flag it" no longer passes once the analyst has confirmed an error. The first run is kept in [`evals/results/llm_eval_before_definition.md`](evals/results/llm_eval_before_definition.md).
+
+A perfect score on 20 cases says the set has saturated, not that the step is solved. The next cases to add are harder ones: conflicting answers, partial answers that settle only some rows, and answers that change the issue type.
+
+These runs went through the Claude Code CLI on a subscription login (`--backend claude-cli`), which cannot set temperature; the API path runs at temperature 0. Full results: [`evals/results/llm_eval.md`](evals/results/llm_eval.md).
 
 CI runs the unit tests, generates small datasets, runs the detection eval and fails the build if safety drops below 100%, recall drops below 75%, or cleaning lowers any table's score.
 
