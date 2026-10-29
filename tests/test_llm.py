@@ -134,3 +134,18 @@ def test_every_call_is_logged_with_sanitised_prompt(tmp_path):
     records = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
     assert len(records) == 1 and records[0]["purpose"] == "generate_question"
     assert "jane.doe" not in json.dumps(records[0]["messages"])
+
+
+@pytest.mark.parametrize("column, issue_type, action, level", [
+    ("total_amount", "NEGATIVE_MONETARY", "SET_ZERO_OR_ABS", "LOW"),   # changes money: needs approval
+    ("total_amount", "NEGATIVE_MONETARY", "CONVERT_TO_REFUND", "LOW"),
+    ("order_date", "FUTURE_DATE", "FLAG_SCHEDULED", "LOW"),            # keeps values
+    ("order_id", "DUPLICATE_PK", "DEDUPLICATE_KEEP_FIRST", "HIGH"),    # applied automatically
+    ("customer_name", "WHITESPACE", "TRIM_WHITESPACE", "HIGH"),
+    ("discount_pct", "STATISTICAL_OUTLIER", "ESCALATE_TO_USER", "MEDIUM"),
+])
+def test_confidence_level_follows_from_action(column, issue_type, action, level):
+    issue = {"column": column, "issue_type": issue_type}
+    out = apply_guardrails(issue, {"confidence_level": "HIGH" if level != "HIGH" else "LOW",
+                                   "recommended_action": action, "context_note": "x"})
+    assert out["confidence_level"] == level and out["level_corrected"]

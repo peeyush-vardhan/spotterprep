@@ -43,6 +43,20 @@ ACTIONS = (
 )
 _IMPUTE_ACTIONS = {"IMPUTE_MEDIAN", "IMPUTE_MODE"}
 
+# ── What a confidence level means ──────────────────────────────────────────
+# Confidence is how far the pipeline may go with the recommended action without asking
+# the analyst again. It follows from the action and the column, so it is defined here
+# and enforced in code, not left to the model's judgement:
+#
+#   HIGH    The pipeline applies the action automatically in Iteration 3.
+#   MEDIUM  Still needs a human decision. The pipeline asks again in Iteration 4.
+#   LOW     The pipeline does not change these values on its own. Either the right
+#           action is to keep or flag them, or the action would change a monetary
+#           value, and every change to money needs the analyst's explicit approval.
+KEEP_ACTIONS = {"PRESERVE_NULL", "FLAG_AND_PRESERVE", "FLAG_SCHEDULED", "FLAG_NULL_MONETARY"}
+ASK_ACTIONS = {"ESCALATE_TO_USER", "FLAG_OUTLIER_REVIEW"}
+_MONETARY_ISSUE_TYPES = {"NULL_MONETARY", "NEGATIVE_MONETARY"}
+
 RECLASSIFY_TOOL = {
     "name": "record_reclassification",
     "description": "Record the updated confidence classification for one data quality issue, "
@@ -122,14 +136,31 @@ def validate_reclassification(data: Any) -> dict:
     return {"confidence_level": level, "recommended_action": action, "context_note": note.strip()[:500]}
 
 
+def is_monetary_issue(issue: dict) -> bool:
+    return issue.get("issue_type") in _MONETARY_ISSUE_TYPES or bool(_MONETARY_COL.search(str(issue.get("column", ""))))
+
+
+def required_level(issue: dict, action: str) -> str:
+    """The confidence level an action implies, per the definition above."""
+    if action in ASK_ACTIONS:
+        return "MEDIUM"
+    if action in KEEP_ACTIONS or is_monetary_issue(issue):
+        return "LOW"
+    return "HIGH"
+
+
 def apply_guardrails(issue: dict, update: dict) -> dict:
-    """Enforce the never-do rules in code. Returns a new dict; notes any override."""
+    """Enforce the never-do rules and the confidence definition in code. Returns a new dict."""
     out = dict(update)
+    out["model_confidence_level"] = update["confidence_level"]
     protected = issue.get("issue_type") in _REDACT_ISSUE_TYPES or is_protected_column(str(issue.get("column", "")))
     if protected and out["recommended_action"] in _IMPUTE_ACTIONS:
         out["recommended_action"] = "FLAG_AND_PRESERVE"
-        out["confidence_level"] = "LOW"
         out["guardrail"] = "imputation blocked on a monetary or personal-data column"
+    level = required_level(issue, out["recommended_action"])
+    if level != out["confidence_level"]:
+        out["confidence_level"] = level
+        out["level_corrected"] = True
     return out
 
 
@@ -154,15 +185,24 @@ You are SpotterPrep, an AI data preparation assistant.
 An analyst has answered a question about a data quality issue. Record the updated
 classification by calling the record_reclassification tool.
 
+What confidence_level means: how far the pipeline may go with your recommended action
+without asking the analyst again. It is not how sure you are that the values are errors.
+- HIGH: the pipeline will apply the action automatically.
+- MEDIUM: a human still has to decide. Use with ESCALATE_TO_USER or FLAG_OUTLIER_REVIEW.
+- LOW: the pipeline will not change the values on its own. Use when the right action is
+  to keep or flag the values (PRESERVE_NULL, FLAG_AND_PRESERVE, FLAG_SCHEDULED,
+  FLAG_NULL_MONETARY), and for any action that changes a monetary value, because every
+  change to money needs the analyst's explicit approval.
+
 Guidance:
 - Nulls the analyst says are legitimate (contractors, opt-outs, pending orders):
-  confidence_level LOW, recommended_action PRESERVE_NULL.
-- The analyst confirms the values are errors: raise confidence_level to HIGH and choose
-  the action that fixes this issue type.
+  PRESERVE_NULL.
+- Values the analyst confirms are legitimate but worth marking (scheduled dates, real
+  outliers, distinct values that look like variants): FLAG_SCHEDULED or FLAG_AND_PRESERVE.
+- Values the analyst confirms are errors: the action that fixes this issue type.
 - Negative monetary values the analyst confirms are refunds: CONVERT_TO_REFUND.
 - Monetary or personal-data columns are never imputed.
-- Still ambiguous after the answer, or the answer is off-topic: keep MEDIUM,
-  recommended_action ESCALATE_TO_USER."""
+- Still ambiguous after the answer, or the answer is off-topic: ESCALATE_TO_USER."""
 
 
 def _issue_block(table: str, safe: dict) -> str:
