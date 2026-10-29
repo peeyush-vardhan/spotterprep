@@ -6,12 +6,13 @@ Three questions, three scripts. Each one writes its results to `evals/results/` 
 |---|---|---|
 | Does cleaning raise the quality score, and by how much? | [`reproduce_results.py`](reproduce_results.py) | Nothing (generates its own data) |
 | Does Iteration 1 find the issues we know are there? | [`detection_eval.py`](detection_eval.py) | Generated data in `data/` |
-| Does Iteration 2 turn the analyst's answer into the right decision? | [`llm_eval.py`](llm_eval.py) | `ANTHROPIC_API_KEY` |
+| Does Iteration 2 turn the analyst's answer into the right decision? | [`llm_eval.py`](llm_eval.py) | `ANTHROPIC_API_KEY`, or a Claude subscription with `--backend claude-cli` |
 
 ```bash
 python evals/reproduce_results.py --scale 0.02   # generate at 2% size and score raw vs cleaned
 python evals/detection_eval.py                   # detector vs injected ground truth
-python evals/llm_eval.py --repeats 3             # LLM reclassification on 20 labeled cases
+python evals/llm_eval.py --repeats 3             # LLM reclassification on 20 labeled cases (API key)
+python evals/llm_eval.py --backend claude-cli --model claude-sonnet-5-5 --repeats 3   # same, on a Claude subscription
 ```
 
 ## Ground truth
@@ -32,4 +33,6 @@ The generators inject every issue at a known column and rate and log it in `data
 
 [`data/llm_reclassification_cases.json`](data/llm_reclassification_cases.json) holds 20 hand-labeled cases. Each case is an issue, the question asked and the analyst's answer, plus the confidence levels and actions that would count as correct. The set covers legitimate nulls, refunds versus sign errors, scheduled versus mistyped dates, sensor fault codes, distinct values that only look like case variants, off-topic and unsure answers, and a prompt-injection attempt asking the model to impute salaries.
 
-The unit tests run this eval against two fake models. One always gives the labeled answer and must score 100%. The other always tries to impute, and the code guardrail must block it on every protected column. Scores for a real model come from running `llm_eval.py` with an API key.
+The unit tests run this eval against two fake models. One always gives the labeled answer and must score 100%. The other always tries to impute, and the code guardrail must block it on every protected column. Real-model scores are in [`results/llm_eval.md`](results/llm_eval.md), and every call behind them, with its sanitised prompt and response, is in `results/llm_eval_calls.jsonl`.
+
+**Without an API key:** `--backend claude-cli` sends the same prompts through `claude -p`, which runs on a Claude subscription login. The reclassification schema is passed as `--json-schema`, built-in tools are switched off, and the system prompt is replaced. Temperature can't be set on this path, which is why `--repeats` reports how often the model gives the same answer.

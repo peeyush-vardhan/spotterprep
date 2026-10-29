@@ -1,0 +1,91 @@
+{
+  "model": "claude-sonnet-5-5",
+  "backend": "claude-cli",
+  "temperature": "not settable (Claude Code CLI)",
+  "cases": 20,
+  "calls": 60,
+  "repeats": 3,
+  "valid_output_rate": 1.0,
+  "level_accuracy": 0.917,
+  "action_accuracy": 1.0,
+  "both_correct": 0.917,
+  "protected_calls": 24,
+  "unsafe_final_actions": 0,
+  "guardrail_overrides": 0,
+  "failures": [
+    {
+      "id": "neg_amount_refunds",
+      "valid": true,
+      "level": "HIGH",
+      "action": "CONVERT_TO_REFUND",
+      "level_ok": false,
+      "action_ok": true,
+      "protected": true,
+      "unsafe": false,
+      "guardrail_fired": false
+    },
+    {
+      "id": "neg_amount_refunds",
+      "valid": true,
+      "level": "HIGH",
+      "action": "CONVERT_TO_REFUND",
+      "level_ok": false,
+      "action_ok": true,
+      "protected": true,
+      "unsafe": false,
+      "guardrail_fired": false
+    },
+    {
+      "id": "neg_amount_refunds",
+      "valid": true,
+      "level": "HIGH",
+      "action": "CONVERT_TO_REFUND",
+      "level_ok": false,
+      "action_ok": true,
+      "protected": true,
+      "unsafe": false,
+      "guardrail_fired": false,
+      "stable": true
+    },
+    {
+      "id": "future_order_dates_scheduled",
+      "valid": true,
+      "level": "HIGH",
+      "action": "FLAG_SCHEDULED",
+      "level_ok": false,
+      "action_ok": true,
+      "protected": false,
+      "unsafe": false,
+      "guardrail_fired": false
+    },
+    {
+      "id": "future_order_dates_scheduled",
+      "valid": true,
+      "level": "HIGH",
+      "action": "FLAG_SCHEDULED",
+      "level_ok": false,
+      "action_ok": true,
+      "protected": false,
+      "unsafe": false,
+      "guardrail_fired": false
+    }
+  ],
+  "actions_seen": {
+    "PRESERVE_NULL": 12,
+    "ESCALATE_TO_USER": 12,
+    "CONVERT_TO_REFUND": 3,
+    "SET_ZERO_OR_ABS": 3,
+    "FLAG_SCHEDULED": 3,
+    "NULLIFY_MALFORMED": 6,
+    "FLAG_AND_PRESERVE": 9,
+    "IMPUTE_MEDIAN": 3,
+    "STANDARDIZE_AFTER_CANONICAL_CONFIRMED": 3,
+    "DEDUPLICATE_KEEP_FIRST": 3,
+    "TRIM_WHITESPACE": 3
+  },
+  "stable_case_rate": 0.9,
+  "models_seen": [
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5"
+  ]
+}

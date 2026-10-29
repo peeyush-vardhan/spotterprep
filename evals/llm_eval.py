@@ -10,11 +10,16 @@ LLMClient.reclassify() and reports:
   Guardrail        no monetary or personal-data issue ends with an imputation action,
                    plus how often the code guardrail had to override the model
 
-Needs ANTHROPIC_API_KEY. Results go to evals/results/llm_eval.{json,md}.
+Two ways to reach the model:
+  --backend api         Anthropic API; needs ANTHROPIC_API_KEY. Temperature 0.
+  --backend claude-cli  The Claude Code CLI on a Claude subscription login, no API key.
+                        Temperature can't be set, so use --repeats to measure stability.
+
+Results go to evals/results/llm_eval.{json,md}.
 
 Usage:
-  python evals/llm_eval.py
-  python evals/llm_eval.py --model claude-sonnet-4-6 --repeats 3   # check run-to-run stability
+  python evals/llm_eval.py --repeats 3
+  python evals/llm_eval.py --backend claude-cli --model sonnet --repeats 3
 """
 from __future__ import annotations
 
@@ -39,7 +44,7 @@ def load_cases(path: Path = CASES_PATH) -> list[dict]:
     return json.loads(path.read_text())
 
 
-def run(llm: LLMClient, cases: list[dict], repeats: int = 1) -> dict:
+def run(llm: LLMClient, cases: list[dict], repeats: int = 1, backend: str = "api") -> dict:
     rows = []
     for case in cases:
         outcomes = []
@@ -66,7 +71,8 @@ def run(llm: LLMClient, cases: list[dict], repeats: int = 1) -> dict:
     rate = lambda k: round(sum(r[k] for r in rows) / n, 3) if n else None  # noqa: E731
     protected_rows = [r for r in rows if r["protected"]]
     result = {
-        "model": llm.model, "cases": len(cases), "calls": n, "repeats": repeats,
+        "model": llm.model, "backend": backend,
+        "temperature": "0" if backend == "api" else "not settable (Claude Code CLI)", "cases": len(cases), "calls": n, "repeats": repeats,
         "valid_output_rate": rate("valid"),
         "level_accuracy": rate("level_ok"),
         "action_accuracy": rate("action_ok"),
@@ -87,7 +93,8 @@ def to_markdown(r: dict) -> str:
     pct = lambda x: "n/a" if x is None else f"{x * 100:.1f}%"  # noqa: E731
     lines = [
         "# LLM eval: Iteration 2 reclassification", "",
-        f"Model `{r['model']}`, {r['cases']} labeled cases, {r['calls']} calls.", "",
+        f"Model `{r['model']}` via {r.get('backend', 'api')} (temperature: {r.get('temperature', '0')}), "
+        f"{r['cases']} labeled cases, {r['calls']} calls.", "",
         f"- **Valid structured output:** {pct(r['valid_output_rate'])}",
         f"- **Confidence level accuracy:** {pct(r['level_accuracy'])}",
         f"- **Recommended action accuracy:** {pct(r['action_accuracy'])}",
@@ -105,15 +112,25 @@ def to_markdown(r: dict) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--backend", choices=["api", "claude-cli"], default="api")
+    ap.add_argument("--model", default=None, help=f"API default: {DEFAULT_MODEL}; CLI default: your Claude Code default")
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--out", default=str(ROOT / "evals" / "results"))
     args = ap.parse_args()
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit("ANTHROPIC_API_KEY is not set. This eval calls the model; see evals/README.md.")
-    from spotterprep.llm import make_client
-    llm = make_client(model=args.model, log_path=Path(args.out) / "llm_eval_calls.jsonl")
-    result = run(llm, load_cases(), repeats=args.repeats)
+    log = Path(args.out) / "llm_eval_calls.jsonl"
+    if args.backend == "api":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            sys.exit("ANTHROPIC_API_KEY is not set. Use --backend claude-cli to run on a Claude subscription instead.")
+        from spotterprep.llm import make_client
+        llm = make_client(model=args.model or DEFAULT_MODEL, log_path=log)
+    else:
+        from spotterprep.claude_cli import ClaudeCLIClient
+        llm = LLMClient(client=ClaudeCLIClient(), model=args.model or "", log_path=log)
+    result = run(llm, load_cases(), repeats=args.repeats, backend=args.backend)
+    if args.backend == "claude-cli":
+        # The CLI also uses a small model for housekeeping, so name the requested model when there is one.
+        result["models_seen"] = sorted(llm.client.messages.models_seen)
+        result["model"] = args.model or ", ".join(result["models_seen"]) or "Claude Code default"
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "llm_eval.json").write_text(json.dumps(result, indent=2))
