@@ -8,7 +8,7 @@ When an AI cleans a table without explanation, analysts spend their time auditin
 
 The result: analysts who feel like *they* cleaned the data, with AI doing the work.
 
-> **Validated at scale:** 4.4M rows · 5 enterprise datasets · 1,880 columns · ~19 GB · 10 Snowflake tables
+> **Built to run at scale:** 4.4M rows · 5 enterprise datasets · 1,880 columns · ~19 GB · 10 Snowflake tables
 > **Try it now:** open [`prototype/index.html`](prototype/index.html) in a browser. No setup needed.
 
 ---
@@ -52,18 +52,40 @@ Full model: [`docs/03_five_iteration_model.md`](docs/03_five_iteration_model.md)
 
 ## Results
 
-Recorded on the full-scale run across all five datasets. Quality is scored at the row level across five weighted dimensions ([methodology](docs/04_quality_framework.md)).
+Every number below is produced by a script in [`evals/`](evals), so anyone can rerun it. These runs use the datasets at 2% of full size (`--scale 0.02`, about two minutes). Quality is scored on five weighted dimensions ([methodology](docs/04_quality_framework.md)).
 
 | Dataset | Domain | Rows | Columns | Raw score | Clean score |
 |---|---|---|---|---|---|
-| CUSTOMER_ORDERS | B2B SaaS / e-commerce | 100,000 | 200 | 54.1 (D) | 91.2 (A) |
-| IOT_TELEMETRY | Industrial IoT | 500,000 | 300 | 68.3 (D) | 97.4 (A) |
-| HR_WORKFORCE | Enterprise HR | 800,000 | 400 | 50.5 (F) | 87.7 (B) |
-| FINANCIAL_LEDGER | General ledger | 1,000,000 | 480 | 63.2 (C) | 97.3 (A) |
-| PRODUCT_CATALOG | Global e-commerce, 8 languages | 2,000,000 | 500 | 59.3 (D) | 96.2 (A) |
-| **Total** | | **4,400,000** | **1,880** | **59.1 (D)** | **93.9 (A)** |
+| CUSTOMER_ORDERS | B2B SaaS / e-commerce | 2,000 | 200 | 81.2 (C) | 94.5 (B) |
+| IOT_TELEMETRY | Industrial IoT | 10,000 | 300 | 89.5 (B) | 99.8 (A) |
+| HR_WORKFORCE | Enterprise HR | 16,000 | 400 | 83.7 (C) | 97.3 (A) |
+| FINANCIAL_LEDGER | General ledger | 20,000 | 480 | 88.4 (B) | 100.0 (A) |
+| PRODUCT_CATALOG | Global e-commerce, 8 languages | 40,000 | 500 | 93.8 (B) | 99.3 (A) |
 
-HR stays at Grade B on purpose. Contractors legitimately have no `bonus_target` or `equity_grant`, and SpotterPrep preserves those nulls instead of inventing payroll data.
+```bash
+python evals/reproduce_results.py --scale 0.02     # regenerates this table
+```
+
+Customer orders and HR lose some completeness after cleaning, on purpose. Malformed emails and impossible values are cleared and flagged instead of guessed, and contractors keep their empty `bonus_target`. A score can only measure the checks it runs, so a clean score of 100 means no check failed, not that the table is perfect.
+
+## Evaluation
+
+The generators log every issue they inject, so the detector can be scored against known ground truth ([how](evals/README.md)).
+
+| Metric (Iteration 1 detector) | Before this release | Now |
+|---|---|---|
+| Recall: injected single-column issues found | 50% (25 of 50) | **82%** (41 of 50) |
+| Precision: detections matching a logged issue | 7% of 424 | **26%** of 159 |
+| Precision on named business columns (filler columns excluded) | not measured | **49%** of 86 |
+| Safety: monetary/PII detections kept LOW, never auto-fixed | 100% | **100%** |
+
+What moved the numbers: text checks were silently skipped under pandas 3, the scan read the first rows instead of a random sample and missed duplicates appended at the end, three tables had no date-order rules, the IoT table needs a composite key, and the CSV reader turned the literal category `N/A` into hundreds of fake null columns.
+
+Still missed, and left visible on purpose: general out-of-range values such as a 999 °C sensor reading, which need bounds the analyst supplies in Iteration 2, and format issues such as HTML in descriptions or text in the wrong language column, which no check covers yet. The full list is in [`evals/results/detection_eval.md`](evals/results/detection_eval.md).
+
+**Iteration 2 (LLM).** The reclassification call uses forced tool use with an enum-constrained schema, validates the output in code, retries transient errors with backoff, runs at temperature 0 and logs every call. The never-impute rule for money and personal data is enforced after the model answers, so a prompt injection cannot override it. [`evals/llm_eval.py`](evals/llm_eval.py) scores a model on 20 labeled cases and needs an API key; the tests run the same harness against fake models.
+
+CI runs the unit tests, generates small datasets, runs the detection eval and fails the build if safety drops below 100%, recall drops below 75%, or cleaning lowers any table's score.
 
 ---
 
@@ -71,8 +93,10 @@ HR stays at Grade B on purpose. Contractors legitimately have no `bonus_target` 
 
 ```
 spotterprep/
-├── spotterprep/        The cleaning engine: one module per iteration, plus scoring and audit
-├── agent/prompts/      System prompt and conversation rules for the conversational agent
+├── spotterprep/        The cleaning engine: one module per iteration, plus scoring, audit and the LLM client
+├── evals/              Ground truth, detection eval, LLM eval and the script behind the results table
+├── tests/              Unit tests (pytest), run in CI
+├── agent/prompts/      Prompt design for the production agent (its MCP tools are not in this repo)
 ├── data_generation/    Five synthetic enterprise datasets with issues injected at known rates
 ├── loaders/            Snowflake loader (staged PUT + COPY INTO) and load orchestration
 ├── sql/                Ready-to-run validation and before/after quality queries
@@ -98,18 +122,15 @@ spotterprep/
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 
-# 1. Generate the five datasets into data/ (about 19 GB; 45 to 90 minutes at full size)
-python data_generation/generate_all.py
+# 1. Generate the five datasets into data/ at 2% size (set SPOTTERPREP_SCALE=1.0 for full size: ~19 GB, 45-90 minutes)
+SPOTTERPREP_SCALE=0.02 python data_generation/generate_all.py
 
-# 2. Score and validate a dataset
-python -c "
-import pandas as pd
-from spotterprep.iteration1_confidence import score_issues, print_confidence_report
-df = pd.read_csv('data/raw/dataset1_customer_orders.csv', nrows=10_000)
-print_confidence_report(score_issues(df, table_name='CUSTOMER_ORDERS', pk_column='order_id'))
-"
+# 2. Measure: quality scores, detection eval, tests
+python evals/reproduce_results.py --skip-generate
+python evals/detection_eval.py
+python -m pytest -q
 
 # 3. Run the AI context conversation (needs an Anthropic API key)
 export ANTHROPIC_API_KEY=your_key
@@ -120,8 +141,6 @@ cp .env.example .env   # fill in your Snowflake details
 python loaders/load_to_snowflake.py --dry-run --dataset 1   # preview DDL, no connection
 python loaders/load_to_snowflake.py                         # load all 10 tables
 ```
-
-To try it quickly, lower `N` at the top of any file in `data_generation/` to a few thousand rows.
 
 ---
 

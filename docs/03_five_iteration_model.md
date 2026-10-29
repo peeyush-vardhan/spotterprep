@@ -160,6 +160,8 @@ Average             59.1   59.1   61.7   77.8   87.6   93.9
 - Iteration 5 adds the final gain — cross-column intelligence that couldn't be found earlier
 - The total gain (59.1 → 93.9) is identical to the single-pass code — but achieved through a process that builds analyst trust at every step
 
+> **Note on these figures:** they were recorded on the original full-scale run with an earlier version of the quality scorer, and the current code does not reproduce them. Current numbers come from a script and are in the [README](../README.md#results) and [`evals/results/`](../evals/results).
+
 ---
 
 ## Engineering Implementation Requirements
