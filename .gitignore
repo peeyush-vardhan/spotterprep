@@ -1,0 +1,9 @@
+data/raw/
+data/cleaned/
+data/profiles/
+data/load_*.log
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.save
