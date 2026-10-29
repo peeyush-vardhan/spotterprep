@@ -83,7 +83,17 @@ What moved the numbers: text checks were silently skipped under pandas 3, the sc
 
 Still missed, and left visible on purpose: general out-of-range values such as a 999 °C sensor reading, which need bounds the analyst supplies in Iteration 2, and format issues such as HTML in descriptions or text in the wrong language column, which no check covers yet. The full list is in [`evals/results/detection_eval.md`](evals/results/detection_eval.md).
 
-**Iteration 2 (LLM).** The reclassification call uses forced tool use with an enum-constrained schema, validates the output in code, retries transient errors with backoff, runs at temperature 0 and logs every call. The never-impute rule for money and personal data is enforced after the model answers, so a prompt injection cannot override it. [`evals/llm_eval.py`](evals/llm_eval.py) scores a model on 20 labeled cases and needs an API key; the tests run the same harness against fake models.
+**Iteration 2 (LLM).** The reclassification call uses forced tool use with an enum-constrained schema, validates the output in code, retries transient errors with backoff, runs at temperature 0 and logs every call. The never-impute rule for money and personal data is enforced after the model answers, so a prompt injection cannot override it. [`evals/llm_eval.py`](evals/llm_eval.py) scores the model on 20 labeled cases, run three times each:
+
+| Metric (Iteration 2, `claude-sonnet-5-5`, 60 calls) | Result |
+|---|---|
+| Valid structured output | 100% |
+| Recommended action matches the label | 100% |
+| Confidence level matches the label | 92% |
+| Same answer on all three runs | 90% of cases |
+| Money or personal-data issue ends in an imputation | 0 of 24 |
+
+Every miss has the same cause. When the analyst confirms that negative amounts are refunds, or that future order dates are pre-orders, the model picks the right action but rates it HIGH, while the labels say LOW. The prompt never defines whether confidence means "how sure we are this is an error" or "how sure we are of the action", so this is a gap in the spec, not a model mistake. It is left in the results rather than fixed by relabeling. These runs went through the Claude Code CLI on a subscription login (`--backend claude-cli`), which cannot set temperature; the API path runs at temperature 0. Full results: [`evals/results/llm_eval.md`](evals/results/llm_eval.md).
 
 CI runs the unit tests, generates small datasets, runs the detection eval and fails the build if safety drops below 100%, recall drops below 75%, or cleaning lowers any table's score.
 
