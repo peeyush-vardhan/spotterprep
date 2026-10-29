@@ -61,7 +61,8 @@ def run(llm: LLMClient, cases: list[dict], repeats: int = 1, backend: str = "api
         protected = issue["issue_type"] in _PROTECTED_TYPES or is_protected_column(issue["column"])
         for out in outcomes:
             rows.append({
-                "id": case["id"], "valid": out.get("valid", True),
+                "id": case["id"], "difficulty": case.get("difficulty", "standard"), "kind": case.get("kind", "-"),
+                "valid": out.get("valid", True),
                 "level": out["confidence_level"], "action": out["recommended_action"],
                 "model_level": out.get("model_confidence_level", out["confidence_level"]),
                 "level_ok": out["confidence_level"] == required_level(issue, out["recommended_action"]),
@@ -92,6 +93,16 @@ def run(llm: LLMClient, cases: list[dict], repeats: int = 1, backend: str = "api
         "failures": [r for r in rows if not (r["action_ok"] and r["model_level_ok"])],
         "actions_seen": dict(Counter(r["action"] for r in rows)),
     }
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r["difficulty"], []).append(r)
+        if r["difficulty"] == "hard":
+            groups.setdefault(f"hard: {r['kind']}", []).append(r)
+    result["by_group"] = {
+        g: {"calls": len(rs), "action_accuracy": round(sum(x["action_ok"] for x in rs) / len(rs), 3),
+            "model_level_follows_definition": round(sum(x["model_level_ok"] for x in rs) / len(rs), 3)}
+        for g, rs in sorted(groups.items())
+    }
     if repeats > 1:
         stable = [r["stable"] for r in rows if "stable" in r]
         result["stable_case_rate"] = round(sum(stable) / len(stable), 3)
@@ -113,9 +124,14 @@ def to_markdown(r: dict) -> str:
     ]
     if "stable_case_rate" in r:
         lines.append(f"- **Same answer on every repeat:** {pct(r['stable_case_rate'])} of cases")
+    if r.get("by_group"):
+        lines += ["", "## By difficulty", "", "| Group | Calls | Action accuracy | Level follows definition |",
+                  "|---|---|---|---|"]
+        lines += [f"| {g} | {v['calls']} | {pct(v['action_accuracy'])} | {pct(v['model_level_follows_definition'])} |"
+                  for g, v in r["by_group"].items()]
     if r["failures"]:
-        lines += ["", "## Misses", "", "| Case | Model level | Final level | Action | Action OK |", "|---|---|---|---|---|"]
-        lines += [f"| {f['id']} | {f['model_level']} | {f['level']} | {f['action']} | {'yes' if f['action_ok'] else 'no'} |"
+        lines += ["", "## Misses", "", "| Case | Kind | Model level | Final level | Action | Action OK |", "|---|---|---|---|---|---|"]
+        lines += [f"| {f['id']} | {f['kind']} | {f['model_level']} | {f['level']} | {f['action']} | {'yes' if f['action_ok'] else 'no'} |"
                   for f in r["failures"]]
     return "\n".join(lines) + "\n"
 
@@ -128,6 +144,8 @@ def main() -> None:
     ap.add_argument("--out", default=str(ROOT / "evals" / "results"))
     args = ap.parse_args()
     log = Path(args.out) / "llm_eval_calls.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("")  # one log per run, so the committed log matches the committed results
     if args.backend == "api":
         if not os.environ.get("ANTHROPIC_API_KEY"):
             sys.exit("ANTHROPIC_API_KEY is not set. Use --backend claude-cli to run on a Claude subscription instead.")

@@ -11,7 +11,7 @@ Three questions, three scripts. Each one writes its results to `evals/results/` 
 ```bash
 python evals/reproduce_results.py --scale 0.02   # generate at 2% size and score raw vs cleaned
 python evals/detection_eval.py                   # detector vs injected ground truth
-python evals/llm_eval.py --repeats 3             # LLM reclassification on 20 labeled cases (API key)
+python evals/llm_eval.py --repeats 3             # LLM reclassification on 34 labeled cases (API key)
 python evals/llm_eval.py --backend claude-cli --model claude-sonnet-5-5 --repeats 3   # same, on a Claude subscription
 ```
 
@@ -31,7 +31,7 @@ The generators inject every issue at a known column and rate and log it in `data
 
 ## LLM eval cases
 
-[`data/llm_reclassification_cases.json`](data/llm_reclassification_cases.json) holds 20 hand-labeled cases. Each case is an issue, the question asked and the analyst's answer, plus the confidence levels and actions that would count as correct. The set covers legitimate nulls, refunds versus sign errors, scheduled versus mistyped dates, sensor fault codes, distinct values that only look like case variants, off-topic and unsure answers, and a prompt-injection attempt asking the model to impute salaries.
+[`data/llm_reclassification_cases.json`](data/llm_reclassification_cases.json) holds 34 hand-labeled cases. Each case is an issue, the question asked and the analyst's answer, plus the actions that would count as correct. The expected confidence level follows from the action (`required_level()` in `spotterprep/llm.py`), so it is not labeled separately. The 20 standard cases cover legitimate nulls, refunds versus sign errors, scheduled versus mistyped dates, sensor fault codes, distinct values that only look like case variants, off-topic and unsure answers, and a prompt-injection attempt asking the model to impute salaries. The 14 hard cases, tagged `"difficulty": "hard"` with a `kind`, cover contradictory answers, answers that split the rows, answers that reframe the issue, sarcasm, reversals, claimed authority, an instruction planted in a data value, and informal mixed-language replies. Results are reported by group.
 
 The unit tests run this eval against two fake models. One always gives the labeled answer and must score 100%. The other always tries to impute, and the code guardrail must block it on every protected column. Real-model scores are in [`results/llm_eval.md`](results/llm_eval.md), and every call behind them, with its sanitised prompt and response, is in `results/llm_eval_calls.jsonl`.
 

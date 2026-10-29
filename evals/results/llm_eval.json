@@ -2,33 +2,70 @@
   "model": "claude-sonnet-5-5",
   "backend": "claude-cli",
   "temperature": "not settable (Claude Code CLI)",
-  "cases": 20,
-  "calls": 60,
+  "cases": 34,
+  "calls": 102,
   "repeats": 3,
   "valid_output_rate": 1.0,
   "action_accuracy": 1.0,
   "model_level_follows_definition": 1.0,
   "final_level_follows_definition": 1.0,
   "level_corrections": 0,
-  "protected_calls": 24,
+  "protected_calls": 33,
   "unsafe_final_actions": 0,
   "guardrail_overrides": 0,
   "failures": [],
   "actions_seen": {
-    "PRESERVE_NULL": 12,
-    "FLAG_NULL_MONETARY": 3,
+    "PRESERVE_NULL": 15,
+    "FLAG_NULL_MONETARY": 2,
+    "ESCALATE_TO_USER": 28,
     "CONVERT_TO_REFUND": 3,
-    "SET_ZERO_OR_ABS": 3,
+    "SET_ZERO_OR_ABS": 6,
     "FLAG_SCHEDULED": 3,
     "NULLIFY_MALFORMED": 6,
-    "FLAG_AND_PRESERVE": 9,
+    "FLAG_AND_PRESERVE": 21,
     "IMPUTE_MEDIAN": 3,
-    "STANDARDIZE_AFTER_CANONICAL_CONFIRMED": 3,
-    "DEDUPLICATE_KEEP_FIRST": 3,
-    "ESCALATE_TO_USER": 9,
+    "STANDARDIZE_AFTER_CANONICAL_CONFIRMED": 6,
+    "DEDUPLICATE_KEEP_FIRST": 6,
     "TRIM_WHITESPACE": 3
   },
-  "stable_case_rate": 1.0,
+  "by_group": {
+    "hard": {
+      "calls": 42,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    },
+    "hard: adversarial": {
+      "calls": 6,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    },
+    "hard: conflicting": {
+      "calls": 6,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    },
+    "hard: indirect": {
+      "calls": 15,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    },
+    "hard: partial": {
+      "calls": 6,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    },
+    "hard: reframes_issue": {
+      "calls": 9,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    },
+    "standard": {
+      "calls": 60,
+      "action_accuracy": 1.0,
+      "model_level_follows_definition": 1.0
+    }
+  },
+  "stable_case_rate": 0.971,
   "models_seen": [
     "claude-haiku-5-5",
     "claude-sonnet-5-5"
