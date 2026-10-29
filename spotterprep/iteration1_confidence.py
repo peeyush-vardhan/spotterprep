@@ -21,11 +21,13 @@ Usage:
 
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+from spotterprep.schema_config import PRIMARY_KEYS, TEMPORAL_PAIRS, is_float, is_number, is_text
 
 
 # ── Issue type constants ───────────────────────────────────────────────────
@@ -175,11 +177,18 @@ def _check_duplicates(col_name: str, series: pd.Series) -> Optional[dict]:
                        example_values=examples)
 
 
+# A column where more than this share of values is negative is signed by design
+# (temperatures, deltas, coordinates), so its negatives are not anomalies.
+_MAX_ANOMALOUS_NEGATIVE_SHARE = 0.05
+
+
 def _check_negatives(col_name: str, series: pd.Series) -> Optional[dict]:
     numeric = pd.to_numeric(series, errors="coerce")
     neg_mask = numeric < 0
     neg_count = int(neg_mask.sum())
     if neg_count == 0:
+        return None
+    if neg_count / max(int(numeric.notna().sum()), 1) > _MAX_ANOMALOUS_NEGATIVE_SHARE:
         return None
     neg_pct = neg_count / len(series)
     examples = [f"{v:.4g}" for v in numeric[neg_mask].head(3)]
@@ -207,8 +216,8 @@ def _check_email(col_name: str, series: pd.Series) -> Optional[dict]:
 
 
 def _check_future_dates(col_name: str, series: pd.Series) -> Optional[dict]:
-    dates = pd.to_datetime(series, errors="coerce")
-    now = pd.Timestamp.now()
+    dates = pd.to_datetime(series, errors="coerce", utc=True)
+    now = pd.Timestamp.now(tz="UTC")
     future_mask = dates > now
     count = int(future_mask.sum())
     if count == 0:
@@ -257,6 +266,11 @@ def _check_categorical_inconsistency(col_name: str, series: pd.Series) -> Option
                        example_values=sorted(inconsistent_variants)[:6])
 
 
+# 5σ rather than 3σ: on a normal column 3σ flags ~0.3% of rows by construction,
+# which made this check fire on nearly every numeric column.
+_OUTLIER_Z = 5.0
+
+
 def _check_outliers(col_name: str, series: pd.Series) -> Optional[dict]:
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     if len(numeric) < 100:
@@ -265,16 +279,32 @@ def _check_outliers(col_name: str, series: pd.Series) -> Optional[dict]:
     if std == 0:
         return None
     z_scores = (numeric - mean) / std
-    outlier_mask = z_scores.abs() > 3
+    outlier_mask = z_scores.abs() > _OUTLIER_Z
     count = int(outlier_mask.sum())
     if count == 0:
         return None
     extremes = numeric[outlier_mask].sort_values()
     examples = [f"{v:.4g}" for v in list(extremes.head(2)) + list(extremes.tail(2))]
     return _make_issue(col_name, IssueType.STATISTICAL_OUTLIER, count, count / len(series),
-                       f"{count} values >3σ from mean (μ={mean:.2f}, σ={std:.2f}) — "
+                       f"{count} values >{_OUTLIER_Z:g}σ from mean (μ={mean:.2f}, σ={std:.2f}) — "
                        f"physical/business bounds needed to classify",
                        example_values=examples)
+
+
+_PERCENT_COL = re.compile(r'(?:_pct|_percent|_percentage)$', re.I)
+
+
+def _check_percent_range(col_name: str, series: pd.Series) -> Optional[dict]:
+    """A column named as a percentage cannot exceed 100 or fall below 0. Bounds are known from
+    the name, so this needs no analyst input, unlike general outliers."""
+    numeric = pd.to_numeric(series, errors="coerce")
+    bad = (numeric > 100) | (numeric < 0)
+    count = int(bad.sum())
+    if count == 0:
+        return None
+    return _make_issue(col_name, IssueType.PHYSICAL_RANGE_VIOLATION, count, count / len(series),
+                       f"{count} values outside 0–100 in a percentage column",
+                       example_values=[f"{v:.4g}" for v in numeric[bad].head(3)])
 
 
 # ── Cross-column temporal sequence scanner ────────────────────────────────
@@ -283,8 +313,8 @@ def _check_temporal_sequence(col_a: str, col_b: str, df: pd.DataFrame) -> Option
     """Detect impossible sequences where a start column is later than its end column."""
     if col_a not in df.columns or col_b not in df.columns:
         return None
-    dates_a = pd.to_datetime(df[col_a], errors="coerce")
-    dates_b = pd.to_datetime(df[col_b], errors="coerce")
+    dates_a = pd.to_datetime(df[col_a], errors="coerce", utc=True)
+    dates_b = pd.to_datetime(df[col_b], errors="coerce", utc=True)
     both_valid = dates_a.notna() & dates_b.notna()
     impossible = both_valid & (dates_a > dates_b)
     count = int(impossible.sum())
@@ -297,15 +327,9 @@ def _check_temporal_sequence(col_a: str, col_b: str, df: pd.DataFrame) -> Option
 
 
 # ── Known temporal pairs per dataset ──────────────────────────────────────
-# These are the start→end column pairs where start > end is always an error.
+# Start→end pairs where start > end is always an error. Defined in schema_config.
 
-_KNOWN_TEMPORAL_PAIRS: dict[str, list[tuple[str, str]]] = {
-    "CUSTOMER_ORDERS":  [("onboarding_date", "go_live_date")],
-    "HR_WORKFORCE":     [("hire_date", "termination_date")],
-    "FINANCIAL_LEDGER": [("effective_date", "posting_date")],
-    "IOT_TELEMETRY":    [],
-    "PRODUCT_CATALOG":  [],
-}
+_KNOWN_TEMPORAL_PAIRS = TEMPORAL_PAIRS
 
 
 # ── Main entry point ───────────────────────────────────────────────────────
@@ -333,8 +357,8 @@ def score_issues(
     pk_column : str, optional
         Name of the primary key column. If None, auto-detected by column name pattern.
     sample_rows : int
-        If df has more rows than this, only the first N rows are used for
-        expensive per-value checks.
+        If df has more rows than this, a seeded random sample of N rows is used
+        for per-value checks. Primary-key uniqueness is always checked on the full table.
 
     Returns
     -------
@@ -364,69 +388,83 @@ def score_issues(
           ]
         }
     """
-    scanned_df = df.head(sample_rows) if len(df) > sample_rows else df
+    # Random, seeded sample: generators and real loads often append late rows (including
+    # duplicates) at the end, so head() systematically misses them.
+    scanned_df = df.sample(n=sample_rows, random_state=0) if len(df) > sample_rows else df
     issues: list[dict] = []
-    scanned_at = datetime.utcnow().isoformat() + "Z"
+    scanned_at = datetime.now(timezone.utc).isoformat()
 
     print(f"  [ConfidenceScorer] Scanning {table_name}: "
           f"{len(scanned_df):,} rows × {len(scanned_df.columns)} cols")
 
     # ── Auto-detect PK column ─────────────────────────────────────────────
-    detected_pk = pk_column
-    if detected_pk is None:
-        for col in scanned_df.columns:
-            if _is_likely_pk(col):
-                detected_pk = col
-                break
+    # Priority: explicit argument, then the table's confirmed schema, then name pattern.
+    if pk_column:
+        pk_cols = [pk_column]
+    elif all(c in df.columns for c in PRIMARY_KEYS.get(table_name.upper(), [None])):
+        pk_cols = PRIMARY_KEYS[table_name.upper()]
+    else:
+        pk_cols = [next((c for c in df.columns if _is_likely_pk(c)), None)]
+        pk_cols = [c for c in pk_cols if c]
+    detected_pk = "+".join(pk_cols) if pk_cols else None
+    if pk_cols:
+        dup_mask = df.duplicated(subset=pk_cols, keep=False)
+        if dup_mask.any():
+            keys = df.loc[dup_mask, pk_cols].astype(str).fillna("").agg("|".join, axis=1)
+            examples = list(keys.drop_duplicates().head(3))
+            issues.append(_make_issue(
+                detected_pk, IssueType.DUPLICATE_PK, int(dup_mask.sum()), float(dup_mask.mean()),
+                f"{int(dup_mask.sum())} rows share a primary key value — deduplication is safe",
+                example_values=examples))
 
     # ── Per-column scans ──────────────────────────────────────────────────
     for col in scanned_df.columns:
         series = scanned_df[col]
-        dtype  = str(series.dtype)
+        text   = is_text(series)
 
         # Nulls — every column
         issue = _check_nulls(col, series)
         if issue:
             issues.append(issue)
 
-        # Duplicate PK
-        if col == detected_pk:
-            issue = _check_duplicates(col, series)
-            if issue:
-                issues.append(issue)
-
         # Negatives — numeric columns and numeric-looking object columns
-        if dtype in ("float64", "float32", "int64", "int32", "int16", "int8"):
+        if is_number(series):
             issue = _check_negatives(col, series)
             if issue:
                 issues.append(issue)
 
         # Email format — object columns with "email" in the name
-        if dtype == "object" and "email" in col.lower():
+        if text and "email" in col.lower():
             issue = _check_email(col, series)
             if issue:
                 issues.append(issue)
 
         # Future dates — temporal columns and datetime dtype
-        if _is_temporal(col) or dtype == "datetime64[ns]":
+        if _is_temporal(col) or pd.api.types.is_datetime64_any_dtype(series.dtype):
             issue = _check_future_dates(col, series)
             if issue:
                 issues.append(issue)
 
         # Whitespace — string columns that are not temporal identifiers
-        if dtype == "object" and not _is_temporal(col):
+        if text and not _is_temporal(col):
             issue = _check_whitespace(col, series)
             if issue:
                 issues.append(issue)
 
         # Categorical inconsistency — low-cardinality string columns
-        if dtype == "object":
+        if text:
             issue = _check_categorical_inconsistency(col, series)
             if issue:
                 issues.append(issue)
 
+        # Percentage bounds — known from the column name
+        if is_number(series) and _PERCENT_COL.search(col):
+            issue = _check_percent_range(col, series)
+            if issue:
+                issues.append(issue)
+
         # Statistical outliers — non-monetary numeric columns (monetary needs context)
-        if dtype in ("float64", "float32") and not _is_monetary(col):
+        if is_float(series) and not _is_monetary(col):
             issue = _check_outliers(col, series)
             if issue:
                 issues.append(issue)

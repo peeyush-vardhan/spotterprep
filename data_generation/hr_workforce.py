@@ -20,8 +20,10 @@ Faker.seed(42)
 np.random.seed(42)
 rng = np.random.default_rng(42)
 
-N = 800_000
-POOL = 20_000   # PII pool size
+# Dataset size scales with SPOTTERPREP_SCALE (default 1.0 = full size). Use 0.01 for a quick run.
+SCALE = float(os.environ.get("SPOTTERPREP_SCALE", "1.0"))
+N = max(1_000, int(800_000 * SCALE))
+POOL = max(500, int(20_000 * SCALE))   # PII pool size
 
 OUT_DIR      = os.path.join(os.path.dirname(__file__), "..", "data")
 RAW_PATH     = os.path.join(OUT_DIR, "raw",      "dataset3_hr_workforce.csv")
@@ -87,7 +89,7 @@ def generate_raw():
     future_hire_idx = rng.choice(N, size=800, replace=False)
     hire_dates_list = hire_dates.tolist()
     for i in future_hire_idx:
-        hire_dates_list[i] = pd.Timestamp("2025-01-01") + pd.to_timedelta(rng.integers(1,365), unit="D")
+        hire_dates_list[i] = pd.Timestamp.now().normalize() + pd.Timedelta(days=1) + pd.to_timedelta(rng.integers(1,365), unit="D")  # always ahead of the run date
     hire_dates = pd.DatetimeIndex(hire_dates_list)
 
     termination_dates = pd.Series([pd.NaT] * N, dtype="datetime64[ns]")
