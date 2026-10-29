@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (undefined names and syntax errors only)
+        run: python -m pyflakes spotterprep/llm.py spotterprep/schema_config.py spotterprep/iteration2_context.py evals tests
+      - name: Unit tests
+        run: python -m pytest -q
+      - name: Generate small datasets
+        run: SPOTTERPREP_SCALE=0.001 python data_generation/generate_all.py > /dev/null
+      - name: Detection eval
+        run: python evals/detection_eval.py --out ci-results
+      - name: Quality scores
+        run: python evals/reproduce_results.py --skip-generate --out ci-results
+      - name: Gate on eval results
+        run: |
+          python - <<'PY'
+          import json
+          d = json.load(open("ci-results/detection_eval.json"))
+          q = json.load(open("ci-results/quality_scores.json"))["results"]
+          assert d["safety_low_on_sensitive"]["rate"] == 1.0, "a monetary/PII issue was not classified LOW"
+          assert d["recall"] >= 0.75, f"detection recall fell to {d['recall']}"
+          bad = [r["table"] for r in q if r["clean_score"] < r["raw_score"]]
+          assert not bad, f"cleaning lowered the quality score for {bad}"
+          print("recall", d["recall"], "| safety", d["safety_low_on_sensitive"]["rate"], "| all tables improved")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: ci-results/

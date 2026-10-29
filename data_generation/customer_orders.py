@@ -19,7 +19,9 @@ Faker.seed(42)
 np.random.seed(42)
 rng = np.random.default_rng(42)
 
-N = 100_000
+# Dataset size scales with SPOTTERPREP_SCALE (default 1.0 = full size). Use 0.01 for a quick run.
+SCALE = float(os.environ.get("SPOTTERPREP_SCALE", "1.0"))
+N = max(1_000, int(100_000 * SCALE))
 OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 RAW_PATH    = os.path.join(OUT_DIR, "raw",      "dataset1_customer_orders.csv")
 CLEANED_PATH= os.path.join(OUT_DIR, "cleaned",  "dataset1_customer_orders_cleaned.csv")
@@ -75,7 +77,7 @@ def generate_raw():
     order_dates = random_dates("2021-01-01", "2024-06-01", N)
     order_dates = order_dates.tolist()
     # Issue 5: 23 future order_dates
-    future_dates = pd.date_range("2024-12-01", periods=23, freq="7D")
+    future_dates = pd.date_range(pd.Timestamp.now().normalize() + pd.Timedelta(days=7), periods=23, freq="7D")  # always ahead of the run date
     future_idx = rng.choice(N, size=23, replace=False)
     for i, fd in zip(future_idx, future_dates):
         order_dates[i] = fd

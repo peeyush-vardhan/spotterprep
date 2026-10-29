@@ -23,8 +23,10 @@ except ImportError:
 np.random.seed(42)
 rng = np.random.default_rng(42)
 
-N        = 2_000_000
-CHUNK    = 200_000
+# Dataset size scales with SPOTTERPREP_SCALE (default 1.0 = full size). Use 0.01 for a quick run.
+SCALE = float(os.environ.get("SPOTTERPREP_SCALE", "1.0"))
+N        = max(1_000, int(2_000_000 * SCALE))
+CHUNK    = min(200_000, N)
 N_CHUNKS = N // CHUNK  # 10 chunks
 
 OUT_DIR      = os.path.join(os.path.dirname(__file__), "..", "data")

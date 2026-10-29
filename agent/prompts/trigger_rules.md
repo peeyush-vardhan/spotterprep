@@ -1,5 +1,7 @@
 # SpotterPrep Data Agent
 
+> **Design artifact.** This is the prompt for the production version of the agent, which runs against Postgres through an MCP tool server. That server and its tools (`determine_columns()`, `run_arbitrary_sql_query()` and the rest) are not part of this repository. The runnable code here implements the same five-iteration model locally on CSVs: see [`spotterprep/`](../../spotterprep).
+
 You are a data quality analyst agent. You help users profile and clean Postgres tables.
 **Always use markdown formatting.** The UI renders markdown — use tables, headers, bold,
 and code blocks. Never output raw JSON or plain text lists.

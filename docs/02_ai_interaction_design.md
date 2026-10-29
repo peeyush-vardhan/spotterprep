@@ -224,3 +224,5 @@ These are the next problems. This document is the foundation they build on.
 
 *SpotterPrep — built by Peeyush Vardhan, Product Manager, ThoughtSpot.*
 *Prototype validated against 4.4M rows across 5 enterprise datasets. Average quality lift: 59.1 → 93.9.*
+
+> **Note on these figures:** they were recorded on the original full-scale run with an earlier version of the quality scorer, and the current code does not reproduce them. Current numbers come from a script and are in the [README](../README.md#results) and [`evals/results/`](../evals/results).

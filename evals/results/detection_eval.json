@@ -1,0 +1,281 @@
+{
+  "injected_total": 65,
+  "scope_counts": {
+    "detector": 50,
+    "cross_column": 11,
+    "out_of_scope": 4
+  },
+  "recall": 0.82,
+  "detected": 41,
+  "in_scope": 50,
+  "recall_by_family": {
+    "CATEGORICAL": {
+      "detected": 6,
+      "total": 8,
+      "recall": 0.75
+    },
+    "DUPLICATE": {
+      "detected": 5,
+      "total": 5,
+      "recall": 1.0
+    },
+    "FORMAT": {
+      "detected": 0,
+      "total": 4,
+      "recall": 0.0
+    },
+    "FUTURE_DATE": {
+      "detected": 4,
+      "total": 4,
+      "recall": 1.0
+    },
+    "IMPOSSIBLE_TEMPORAL": {
+      "detected": 5,
+      "total": 5,
+      "recall": 1.0
+    },
+    "MALFORMED_EMAIL": {
+      "detected": 2,
+      "total": 2,
+      "recall": 1.0
+    },
+    "NEGATIVE_MONETARY": {
+      "detected": 4,
+      "total": 4,
+      "recall": 1.0
+    },
+    "NEGATIVE_NUMERIC": {
+      "detected": 3,
+      "total": 3,
+      "recall": 1.0
+    },
+    "NULL": {
+      "detected": 9,
+      "total": 9,
+      "recall": 1.0
+    },
+    "OUT_OF_RANGE": {
+      "detected": 2,
+      "total": 5,
+      "recall": 0.4
+    },
+    "WHITESPACE": {
+      "detected": 1,
+      "total": 1,
+      "recall": 1.0
+    }
+  },
+  "precision_vs_logged": 0.264,
+  "detections_total": 159,
+  "precision_named_columns": 0.488,
+  "detections_named_columns": 86,
+  "precision_by_confidence": {
+    "HIGH": {
+      "matched": 25,
+      "total": 51,
+      "precision": 0.49
+    },
+    "LOW": {
+      "matched": 8,
+      "total": 15,
+      "precision": 0.533
+    },
+    "MEDIUM": {
+      "matched": 9,
+      "total": 93,
+      "precision": 0.097
+    }
+  },
+  "safety_low_on_sensitive": {
+    "low": 15,
+    "total": 15,
+    "rate": 1.0
+  },
+  "missed": [
+    {
+      "table": "CUSTOMER_ORDERS",
+      "issue": "outliers_enterprise",
+      "family": "OUT_OF_RANGE",
+      "columns": [
+        "total_amount"
+      ],
+      "detected": false
+    },
+    {
+      "table": "IOT_TELEMETRY",
+      "issue": "sensor_fault_temperature",
+      "family": "OUT_OF_RANGE",
+      "columns": [
+        "temperature_c"
+      ],
+      "detected": false
+    },
+    {
+      "table": "IOT_TELEMETRY",
+      "issue": "inconsistent_format",
+      "family": "CATEGORICAL",
+      "columns": [
+        "firmware_version"
+      ],
+      "detected": false
+    },
+    {
+      "table": "HR_WORKFORCE",
+      "issue": "perf_rating_oob",
+      "family": "OUT_OF_RANGE",
+      "columns": [
+        "perf_rating_2019",
+        "perf_rating_2020",
+        "perf_rating_2021",
+        "perf_rating_2022",
+        "perf_rating_2023",
+        "perf_rating_2024"
+      ],
+      "detected": false
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "account_code_format",
+      "family": "CATEGORICAL",
+      "columns": [
+        "account_code"
+      ],
+      "detected": false
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "floating_point_precision",
+      "family": "FORMAT",
+      "columns": [
+        "debit_amount"
+      ],
+      "detected": false
+    },
+    {
+      "table": "PRODUCT_CATALOG",
+      "issue": "html_in_description",
+      "family": "FORMAT",
+      "columns": [
+        "description_en"
+      ],
+      "detected": false
+    },
+    {
+      "table": "PRODUCT_CATALOG",
+      "issue": "lang_swap",
+      "family": "FORMAT",
+      "columns": [
+        "product_name_en",
+        "product_name_hi",
+        "product_name_ja",
+        "product_name_de",
+        "product_name_fr",
+        "product_name_es",
+        "product_name_pt",
+        "product_name_zh"
+      ],
+      "detected": false
+    },
+    {
+      "table": "PRODUCT_CATALOG",
+      "issue": "special_chars_utf8",
+      "family": "FORMAT",
+      "columns": [
+        "product_name"
+      ],
+      "detected": false
+    }
+  ],
+  "excluded": [
+    {
+      "table": "CUSTOMER_ORDERS",
+      "issue": "orphaned_foreign_key",
+      "scope": "out_of_scope",
+      "column": "customer_id"
+    },
+    {
+      "table": "CUSTOMER_ORDERS",
+      "issue": "logic_violation_arr_mrr",
+      "scope": "cross_column",
+      "column": "arr/mrr"
+    },
+    {
+      "table": "IOT_TELEMETRY",
+      "issue": "physics_violation",
+      "scope": "cross_column",
+      "column": "power_kw > V*I"
+    },
+    {
+      "table": "IOT_TELEMETRY",
+      "issue": "zero_vibration_running",
+      "scope": "cross_column",
+      "column": "vibration_hz"
+    },
+    {
+      "table": "IOT_TELEMETRY",
+      "issue": "sensor_dropout",
+      "scope": "out_of_scope",
+      "column": "15 sensor columns"
+    },
+    {
+      "table": "HR_WORKFORCE",
+      "issue": "comp_logic_violation",
+      "scope": "cross_column",
+      "column": "total_comp < base_salary"
+    },
+    {
+      "table": "HR_WORKFORCE",
+      "issue": "orphaned_fk",
+      "scope": "out_of_scope",
+      "column": "manager_id"
+    },
+    {
+      "table": "HR_WORKFORCE",
+      "issue": "band_violation",
+      "scope": "cross_column",
+      "column": "base_salary > salary_band_max"
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "imbalanced_journal_entries",
+      "scope": "cross_column",
+      "column": "debit/credit"
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "net_amount_calc_error",
+      "scope": "cross_column",
+      "column": "net_amount"
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "intercompany_imbalance",
+      "scope": "cross_column",
+      "column": "intercompany_flag"
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "orphaned_vendor",
+      "scope": "out_of_scope",
+      "column": "vendor_id"
+    },
+    {
+      "table": "FINANCIAL_LEDGER",
+      "issue": "large_posting_effective_lag",
+      "scope": "cross_column",
+      "column": "posting_date"
+    },
+    {
+      "table": "PRODUCT_CATALOG",
+      "issue": "weight_inconsistency",
+      "scope": "cross_column",
+      "column": "weight_kg/lbs"
+    },
+    {
+      "table": "PRODUCT_CATALOG",
+      "issue": "stale_fx_rates",
+      "scope": "cross_column",
+      "column": "price_eur"
+    }
+  ]
+}

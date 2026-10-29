@@ -16,7 +16,9 @@ warnings.filterwarnings("ignore")
 np.random.seed(42)
 rng = np.random.default_rng(42)
 
-N = 1_000_000
+# Dataset size scales with SPOTTERPREP_SCALE (default 1.0 = full size). Use 0.01 for a quick run.
+SCALE = float(os.environ.get("SPOTTERPREP_SCALE", "1.0"))
+N = max(1_000, int(1_000_000 * SCALE))
 OUT_DIR      = os.path.join(os.path.dirname(__file__), "..", "data")
 RAW_PATH     = os.path.join(OUT_DIR, "raw",      "dataset4_financial_ledger.csv")
 CLEANED_PATH = os.path.join(OUT_DIR, "cleaned",  "dataset4_financial_ledger_cleaned.csv")
@@ -68,7 +70,7 @@ def generate_raw():
     future_idx = rng.choice(N, size=100, replace=False)
     post_list2 = posting_dates.tolist()
     for i in future_idx:
-        post_list2[i] = pd.Timestamp("2025-01-01") + pd.to_timedelta(rng.integers(1, 365), unit="D")
+        post_list2[i] = pd.Timestamp.now().normalize() + pd.Timedelta(days=1) + pd.to_timedelta(rng.integers(1, 365), unit="D")  # always ahead of the run date
     posting_dates = pd.DatetimeIndex(post_list2)
 
     # fiscal calendar
@@ -324,15 +326,17 @@ def clean_raw(df):
     rows_modified += neg_debit.sum()
     log.append(f"Fixed {neg_debit.sum()} negative debit_amount values")
 
-    # NUMERIC: Recompute net_amount from source columns
-    calc_err = (cleaned["net_amount"] - (cleaned["debit_amount"] - cleaned["credit_amount"])).abs() > 0.01
-    cleaned.loc[calc_err, "net_amount"] = cleaned.loc[calc_err, "debit_amount"] - cleaned.loc[calc_err, "credit_amount"]
+    # MONETARY: Round source amounts to 2 decimal places first
+    for col in ["debit_amount", "credit_amount"]:
+        cleaned[col] = cleaned[col].round(2)
+
+    # NUMERIC: net_amount is derived, so recompute it from the rounded source columns.
+    # Rounding net separately would leave sub-cent mismatches that fail the net = debit - credit check.
+    recomputed = (cleaned["debit_amount"] - cleaned["credit_amount"]).round(2)
+    calc_err = (cleaned["net_amount"] - recomputed).abs() > 0.01
+    cleaned["net_amount"] = recomputed
     rows_modified += calc_err.sum()
     log.append(f"Recomputed net_amount for {calc_err.sum()} rows with calculation errors")
-
-    # MONETARY: Round amounts to 2 decimal places
-    for col in ["debit_amount","credit_amount","net_amount"]:
-        cleaned[col] = cleaned[col].round(2)
     log.append("Rounded monetary amounts to 2 decimal places")
 
     # TEMPORAL: Flag future posting_dates

@@ -38,6 +38,8 @@ The output is not just a clean dataset. It is a clean dataset with a full audit 
 
 **Prototype validation:** The complete decision tree has been implemented and run against five industry-realistic datasets totalling 4.4M rows and 1,880 columns loaded into Snowflake. Average quality score improvement: 59.1 → 93.9 across all datasets.
 
+> **Note on these figures:** they were recorded on the original full-scale run with an earlier version of the quality scorer, and the current code does not reproduce them. Current numbers come from a script and are in the [README](../README.md#results) and [`evals/results/`](../evals/results).
+
 ---
 
 ## 4. The Five-Iteration Cleaning Model

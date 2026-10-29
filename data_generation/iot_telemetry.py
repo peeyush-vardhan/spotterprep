@@ -15,7 +15,9 @@ warnings.filterwarnings("ignore")
 np.random.seed(42)
 rng = np.random.default_rng(42)
 
-N = 500_000
+# Dataset size scales with SPOTTERPREP_SCALE (default 1.0 = full size). Use 0.01 for a quick run.
+SCALE = float(os.environ.get("SPOTTERPREP_SCALE", "1.0"))
+N = max(1_000, int(500_000 * SCALE))
 N_DEVICES = 50
 OUT_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
 RAW_PATH     = os.path.join(OUT_DIR, "raw",      "dataset2_iot_telemetry.csv")
@@ -167,7 +169,7 @@ def generate_raw():
     future_idx = rng.choice(N, size=500, replace=False)
     reading_ts_list = reading_ts.tolist()
     for i in future_idx:
-        reading_ts_list[i] = pd.Timestamp("2025-03-01") + pd.to_timedelta(rng.integers(0, 365), unit="D")
+        reading_ts_list[i] = pd.Timestamp.now().normalize() + pd.Timedelta(days=1) + pd.to_timedelta(rng.integers(0, 365), unit="D")  # always ahead of the run date
     reading_ts = pd.DatetimeIndex(reading_ts_list)
 
     # Issue 5: 200 readings where ingestion_ts < reading_ts

@@ -31,11 +31,13 @@ Usage:
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+from spotterprep.schema_config import PRIMARY_KEYS, is_float, is_number, is_text
 
 
 # ── Dimension weights ──────────────────────────────────────────────────────
@@ -63,6 +65,26 @@ _PII_COL       = re.compile(r'(?:^|_)(?:name|email|phone|address|ssn|dob|birth|p
 _PK_COL        = re.compile(r'(?:^|_)id$|_key$|_pk$', re.I)
 _TEMPORAL_COL  = re.compile(r'(?:^|_)(?:date|timestamp|time)(?:_|$)|_at$', re.I)
 _EMAIL_FORMAT  = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+# Columns SpotterPrep itself adds during cleaning (e.g. `order_amount_flag`, `vendor_id_orphan`).
+# They are sparse by design: empty means "nothing to flag". They describe the data rather than
+# being data, so every dimension ignores them. Without this, their nulls were counted as missing
+# critical values and cleaned tables scored lower than raw ones.
+_ANNOTATION_COL = re.compile(r'_(?:flag|orphan)$', re.I)
+
+# Primary keys per dataset. A list means a composite key. Name-pattern detection is only a
+# fallback: in IOT_TELEMETRY the first `_id` column is `device_id`, which repeats by design.
+# PRIMARY_KEYS lives in spotterprep/schema_config.py, shared with the detector.
+
+# A negative value is only treated as invalid when the column is otherwise non-negative.
+# Columns that are signed by nature (NPS, deltas, normally distributed metrics) routinely hold
+# negatives; flagging them made Validity near zero on every table, raw or cleaned.
+_MAX_ANOMALOUS_NEGATIVE_SHARE = 0.05
+
+
+def _data_columns(df: pd.DataFrame) -> list[str]:
+    """All columns except SpotterPrep's own annotation columns."""
+    return [c for c in df.columns if not _ANNOTATION_COL.search(c)]
 
 # Known temporal start→end pairs per dataset.
 # A row fails Accuracy if start > end for any known pair.
@@ -93,7 +115,7 @@ def _score_completeness(df: pd.DataFrame) -> tuple[float, dict]:
     Critical columns: PK, monetary, and PII columns detected by name pattern.
     """
     critical_cols = [
-        c for c in df.columns
+        c for c in _data_columns(df)
         if bool(_PK_COL.search(c)) or bool(_MONETARY_COL.search(c)) or bool(_PII_COL.search(c))
     ]
     if not critical_cols:
@@ -119,26 +141,30 @@ def _score_validity(df: pd.DataFrame) -> tuple[float, dict]:
     failing = pd.Series(False, index=df.index)
     detail: dict = {"checks_run": []}
 
-    for col in df.columns:
-        dtype = str(df[col].dtype)
+    for col in _data_columns(df):
+        s = df[col]
 
         # Malformed email
-        if "email" in col.lower() and dtype == "object":
+        if "email" in col.lower() and is_text(s):
             non_null = df[col].notna()
-            malformed = non_null & ~df[col].astype(str).apply(
-                lambda x: bool(_EMAIL_FORMAT.match(x))
-            )
+            # In pandas 3, astype(str) on a string column keeps missing values as NaN, so match
+            # only the non-null cells.
+            valid = df.loc[non_null, col].astype(str).str.match(_EMAIL_FORMAT)
+            malformed = non_null & ~valid.reindex(df.index, fill_value=True)
             failing |= malformed
             detail["checks_run"].append(f"{col}:email_format")
 
-        # Negative values in non-monetary numeric columns
-        if dtype in ("float64", "float32", "int64", "int32") and not _MONETARY_COL.search(col):
+        # Negative values in non-monetary columns that are otherwise non-negative
+        if is_number(s) and not _MONETARY_COL.search(col):
             numeric = pd.to_numeric(df[col], errors="coerce")
-            failing |= (numeric < 0).fillna(False)
-            detail["checks_run"].append(f"{col}:no_negatives")
+            negative = (numeric < 0).fillna(False)
+            share = float(negative.mean()) if len(negative) else 0.0
+            if 0 < share <= _MAX_ANOMALOUS_NEGATIVE_SHARE:
+                failing |= negative
+                detail["checks_run"].append(f"{col}:no_negatives")
 
         # Extreme outliers (>5σ) in float columns — anything beyond 5σ is a data error
-        if dtype in ("float64", "float32") and not _MONETARY_COL.search(col):
+        if is_float(s) and not _MONETARY_COL.search(col):
             numeric = pd.to_numeric(df[col], errors="coerce").dropna()
             if len(numeric) > 50:
                 mean, std = float(numeric.mean()), float(numeric.std())
@@ -153,35 +179,40 @@ def _score_validity(df: pd.DataFrame) -> tuple[float, dict]:
     return score, detail
 
 
-def _score_uniqueness(df: pd.DataFrame, pk_column: Optional[str]) -> tuple[float, dict]:
+def _score_uniqueness(df: pd.DataFrame, pk_column, table_name: str = "") -> tuple[float, dict]:
     """
-    % of rows with a unique value in the PK column.
-    Returns 100.0 if no PK column is detected.
+    % of rows whose primary key (single or composite) is unique.
+    Key resolution order: explicit pk_column, the dataset's known key, then name-pattern detection.
+    Returns 100.0 if no key can be resolved.
     """
-    col = pk_column
-    if col is None:
-        col = next((c for c in df.columns if _PK_COL.search(c)), None)
-    if col is None or col not in df.columns:
-        return 100.0, {"note": "No PK column detected — uniqueness not measured"}
+    if pk_column is not None:
+        cols = [pk_column] if isinstance(pk_column, str) else list(pk_column)
+    elif table_name.upper() in PRIMARY_KEYS:
+        cols = PRIMARY_KEYS[table_name.upper()]
+    else:
+        found = next((c for c in _data_columns(df) if _PK_COL.search(c)), None)
+        cols = [found] if found else []
+    if not cols or any(c not in df.columns for c in cols):
+        return 100.0, {"note": "No primary key resolved — uniqueness not measured"}
 
-    dup_count = int(df[col].duplicated(keep=False).sum())
+    dup_count = int(df.duplicated(subset=cols, keep=False).sum())
     passing   = len(df) - dup_count
     score     = round(passing / len(df) * 100, 2)
-    return score, {"pk_column": col, "duplicate_rows": dup_count}
+    return score, {"pk_columns": cols, "duplicate_rows": dup_count}
 
 
 def _score_consistency(df: pd.DataFrame) -> tuple[float, dict]:
     """
     % of rows using the canonical (modal) form of each controlled vocabulary column.
-    A column is treated as a controlled vocabulary if it has object dtype and
+    A column is treated as a controlled vocabulary if it is a text column and
     fewer than 50 unique non-null values.
     Any row with a non-modal case variant in any such column fails this dimension.
     """
     failing = pd.Series(False, index=df.index)
     inconsistent_cols = []
 
-    for col in df.columns:
-        if str(df[col].dtype) != "object":
+    for col in _data_columns(df):
+        if not is_text(df[col]):
             continue
         non_null = df[col].dropna()
         if non_null.nunique() > 50 or len(non_null) == 0:
@@ -190,7 +221,7 @@ def _score_consistency(df: pd.DataFrame) -> tuple[float, dict]:
         # Find case-variant groups
         lower_to_variants: dict = {}
         for val in non_null.unique():
-            lower_to_variants.setdefault(val.strip().lower(), set()).add(val)
+            lower_to_variants.setdefault(str(val).strip().lower(), set()).add(val)
 
         multi_variant_groups = {k: v for k, v in lower_to_variants.items() if len(v) > 1}
         if not multi_variant_groups:
@@ -310,7 +341,7 @@ def _grade(score: float) -> str:
 def compute_quality_score(
     df: pd.DataFrame,
     table_name: str,
-    pk_column: Optional[str] = None,
+    pk_column=None,
     sample_rows: int = 10_000,
 ) -> dict:
     """
@@ -325,8 +356,8 @@ def compute_quality_score(
         The DataFrame to score (pre- or post-transformation).
     table_name : str
         Dataset name — used to look up known temporal pairs and logic checks.
-    pk_column : str, optional
-        Name of the PK column. Auto-detected if None.
+    pk_column : str or list[str], optional
+        Primary key column(s). Defaults to the dataset's known key, then name-pattern detection.
     sample_rows : int
         Max rows to use. Default 10K gives <2s on a 500-column table.
 
@@ -349,11 +380,12 @@ def compute_quality_score(
           "grade": str,
         }
     """
-    sample = df.head(sample_rows) if len(df) > sample_rows else df
+    # Fixed-seed random sample: representative of the whole table and reproducible run to run.
+    sample = df.sample(n=sample_rows, random_state=0) if len(df) > sample_rows else df
 
     c_score, c_detail = _score_completeness(sample)
     v_score, v_detail = _score_validity(sample)
-    u_score, u_detail = _score_uniqueness(sample, pk_column)
+    u_score, u_detail = _score_uniqueness(sample, pk_column, table_name)
     co_score, co_detail = _score_consistency(sample)
     a_score, a_detail = _score_accuracy(sample, table_name)
 
@@ -368,7 +400,7 @@ def compute_quality_score(
 
     return {
         "table_name":  table_name.upper(),
-        "scored_at":   datetime.utcnow().isoformat() + "Z",
+        "scored_at":   datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "row_count":   len(df),
         "sample_rows": len(sample),
         "dimensions": {
